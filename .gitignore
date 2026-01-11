@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pkl
+
+# VS Code
+.vscode/
+
+# Large Data Files
+*.csv
+!matching_halls.csv
+!code_unique.csv
+!retry_halls.csv
+
+# Directories
+motoデータ/
+.claude/
+.agent/
+!.agent/workflows/
+
+# Excel Analysis Results
+duo解析/
+*.xlsx
