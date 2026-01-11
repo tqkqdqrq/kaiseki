@@ -3,10 +3,14 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 from datetime import datetime
+import os
+import pickle
+from tqdm import tqdm
 
 # ===== 設定 =====
-INPUT_FILE = r'C:\Users\ilove\Desktop\解析\20251223_duo2_azukun.csv'
+INPUT_FILE = r'C:\Users\ilove\Desktop\解析\jyogai20251223_duo2_azukun.csv'
 OUTPUT_FILE = r'C:\Users\ilove\Desktop\解析\duo解析\duo_analysis_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.xlsx'
+CACHE_FILE = r'C:\Users\ilove\Desktop\解析\chains_cache.pkl'
 
 # 設定
 HEAVEN_THRESHOLD = 35  # 天国連チャンとみなすG数
@@ -67,7 +71,7 @@ def analyze_chains(df):
     current_chain_hits = [] # インデックスのリスト
     prev_chain_len = 0
 
-    for idx, row in df.iterrows():
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Analyzing Chains"):
         row_id = row['ID']
         start_g = row['Start']
 
@@ -258,8 +262,9 @@ def analyze_chains(df):
             else:
                 through_count += 1
 
-            # 前回の特殊判定を保存（天国でも単発でも）
-            prev_special = special_judge
+            # 前回の特殊判定を保存（天国チェーンの場合のみ更新、天国以外は直近の天国の値を保持）
+            if is_heaven:
+                prev_special = special_judge
 
             prev_id = current_id
 
@@ -1983,12 +1988,16 @@ def write_excel(df, heaven_rate_df, heaven_by_chain_df, crosstab_df, rule3_df, c
         # ... (中略) ...
 
         col_total_dedama = col_map.get('純増枚数')
+        col_max_balance = col_map.get('当日差枚最大_開始前')  # T列
+        col_prev_special = col_map.get('前回特殊判定')  # R列
 
         # 共通の列参照
         ref_r3_hvn_full = f"ChainData!${col_r3_hvn}:${col_r3_hvn}"
         ref_r3_thr_full = f"ChainData!${col_r3_thr}:${col_r3_thr}"
         ref_first_g_full = f"ChainData!${col_first_g}:${col_first_g}"
         ref_total_dedama_full = f"ChainData!${col_total_dedama}:${col_total_dedama}"
+        ref_max_balance_full = f"ChainData!${col_max_balance}:${col_max_balance}"  # 差枚条件用
+        ref_prev_special_full = f"ChainData!${col_prev_special}:${col_prev_special}"  # 前回特殊判定条件用
         
         # カテゴリリスト
         categories = [
@@ -2013,7 +2022,8 @@ def write_excel(df, heaven_rate_df, heaven_by_chain_df, crosstab_df, rule3_df, c
 
         # ========== 期待値表シート（0〜8スルー目2連発生） ==========
         # Loop for Sheets (0スルー目 〜 8スルー目)
-        for sheet_n in range(9):
+        # ループ: 9つのシートを作成
+        for sheet_n in tqdm(range(9), desc="Creating Sheets"):
             sheet_name = f"{sheet_n}スルー目2連発生期待値表一覧"
             ws_ev = writer.book.create_sheet(sheet_name)
             
@@ -2101,16 +2111,16 @@ def write_excel(df, heaven_rate_df, heaven_by_chain_df, crosstab_df, rule3_df, c
                         cell.fill = row_fill
                         cell.border = ev_border
                         
-                        # 2列目: 初当たり = 平均初当G - 開始G
-                        hatsu_formula = f'=IFERROR(AVERAGEIFS({ref_first_g_full}, {ref_r3_thr_full}, "{thr_val}", {ref_judge_full}, "{judge_val}", {ref_first_g_full}, ">="&{c_start}{row_idx}) - {c_start}{row_idx}, "[-]")'
+                        # 2列目: 初当たり = (平均初当G - 開始G) / CeilingAnalysis!M6
+                        hatsu_formula = f'=IFERROR((AVERAGEIFS({ref_first_g_full}, {ref_r3_thr_full}, "{thr_val}", {ref_judge_full}, "{judge_val}", {ref_first_g_full}, ">="&{c_start}{row_idx}, {ref_max_balance_full}, "<500", {ref_prev_special_full}, "<1000") - {c_start}{row_idx}) / CeilingAnalysis!$M$6, "[-]")'
                         cell = ws_ev.cell(row=row_idx, column=current_col+1, value=hatsu_formula)
                         cell.number_format = '0.0'
                         cell.fill = row_fill
                         cell.border = ev_border
                         
-                        # 3列目: TY (純増枚数, <800G限定, 補正値減算)
+                        # 3列目: TY (純増枚数, <800G限定, 補正値減算, 差枚<500, 前回特殊<1000条件付き)
                         # 平均純増(<800) - 32 * (50/25.3)
-                        avg_under800 = f'AVERAGEIFS({ref_total_dedama_full}, {ref_r3_thr_full}, "{thr_val}", {ref_judge_full}, "{judge_val}", {ref_first_g_full}, ">="&{c_start}{row_idx}, {ref_first_g_full}, "<800")'
+                        avg_under800 = f'AVERAGEIFS({ref_total_dedama_full}, {ref_r3_thr_full}, "{thr_val}", {ref_judge_full}, "{judge_val}", {ref_first_g_full}, ">="&{c_start}{row_idx}, {ref_first_g_full}, "<800", {ref_max_balance_full}, "<500", {ref_prev_special_full}, "<1000")'
                         ty_formula = f'=IFERROR({avg_under800} - 32 * (50/25.3), "[-]")'
                         
                         cell = ws_ev.cell(row=row_idx, column=current_col+2, value=ty_formula)
@@ -2137,8 +2147,8 @@ def write_excel(df, heaven_rate_df, heaven_by_chain_df, crosstab_df, rule3_df, c
                         cell.fill = row_fill
                         cell.border = ev_border
                         
-                        # 6列目: サンプル数
-                        cnt_sample = f'COUNTIFS({ref_r3_thr_full}, "{thr_val}", {ref_judge_full}, "{judge_val}", {ref_first_g_full}, ">="&{c_start}{row_idx})'
+                        # 6列目: サンプル数 (差枚<500, 前回特殊<1000条件付き)
+                        cnt_sample = f'COUNTIFS({ref_r3_thr_full}, "{thr_val}", {ref_judge_full}, "{judge_val}", {ref_first_g_full}, ">="&{c_start}{row_idx}, {ref_max_balance_full}, "<500", {ref_prev_special_full}, "<1000")'
                         cell = ws_ev.cell(row=row_idx, column=current_col+5, value=f'={cnt_sample}')
                         cell.number_format = '#,##0'
                         cell.fill = row_fill
@@ -2154,6 +2164,163 @@ def write_excel(df, heaven_rate_df, heaven_by_chain_df, crosstab_df, rule3_df, c
                     # 次のテーブルへシフト (7列データ + 1列空白)
                     current_col += 8
 
+        # ========== 【2連なし】全体期待値表シート ==========
+        ws_ev_no2 = writer.book.create_sheet("2連なし期待値表一覧")
+        
+        # 集計用データを抽出（2連なし + 差枚<500 + 前回特殊<1000条件）
+        # chains_dfには 'Loc_全体' 列があり、ここに '2連なし' が入っている
+        if 'Loc_全体' in chains_df.columns:
+            mask_no2 = (chains_df['Loc_全体'] == '2連なし') & (chains_df['Max_Daily_Balance_Before'] < 500) & (chains_df['Prev_Special_Judge'] < 1000)
+            df_target_no2 = chains_df[mask_no2].copy()
+        else:
+            # 万が一列がない場合（あり得ないが念のため）
+            df_target_no2 = pd.DataFrame(columns=chains_df.columns)
+        
+        # 0スルー目〜9スルー目の10個のテーブルを横並びで生成
+        current_col_no2 = 1
+        for k in range(10):
+            thr_val_no2 = k  # 0スルー目 → k=0
+            
+            # データ計算用のサブセット抽出
+            # 条件1: 進行中 (天国非当選かつスルー回数未到達)
+            # (R3_Heaven=False) & (R3_Through <= k) & (R3_End > k)
+            mask_prog = (df_target_no2['R3_Heaven'] == False) & (df_target_no2['R3_Through'] <= k) & (df_target_no2['R3_End'] > k)
+            
+            # 条件2: 確定天国 (天国当選かつスルー回数一致)
+            # (R3_Heaven=True) & (R3_Through == k)
+            mask_hvn = (df_target_no2['R3_Heaven'] == True) & (df_target_no2['R3_Through'] == k)
+            
+            sub_prog = df_target_no2[mask_prog]
+            sub_hvn = df_target_no2[mask_hvn]
+            
+            # 列幅調整 (7列分)
+            for col_offset in range(7):
+                ws_ev_no2.column_dimensions[get_column_letter(current_col_no2 + col_offset)].width = [10, 12, 12, 12, 10, 10, 12][col_offset]
+            
+            # カテゴリヘッダー
+            cell = ws_ev_no2.cell(row=1, column=current_col_no2, value=f"■ {k}スルー目")
+            cell.font = Font(bold=True, size=12)
+            cell.fill = ev_cat_fill
+            cell.border = ev_border
+            for c in range(current_col_no2 + 1, current_col_no2 + 7):
+                cell = ws_ev_no2.cell(row=1, column=c)
+                cell.fill = ev_cat_fill
+                cell.border = ev_border
+            
+            # テーブルヘッダー
+            headers_no2 = ["開始G", "初当たり", "TY", "5枚等価", "出玉率", "サンプル数", "調整TY"]
+            for i, header in enumerate(headers_no2):
+                cell = ws_ev_no2.cell(row=2, column=current_col_no2 + i, value=header)
+                cell.fill = ev_header_fill
+                cell.font = ev_header_font
+                cell.border = ev_border
+                cell.alignment = Alignment(horizontal='center')
+            
+            # データ行
+            data_start_row_no2 = 3
+            for i, start_g in enumerate(range(35, 801, 5)):
+                row_idx = data_start_row_no2 + i
+                
+                # 交互の背景色
+                offset = (start_g - 35) // 5
+                row_fill = ev_row_fill_even if offset % 2 == 0 else ev_row_fill_odd
+                
+                # 列参照用のヘルパー
+                c_start   = get_column_letter(current_col_no2)
+                c_hatsu   = get_column_letter(current_col_no2 + 1)
+                c_ty      = get_column_letter(current_col_no2 + 2)
+                c_5mai    = get_column_letter(current_col_no2 + 3)
+                c_rate    = get_column_letter(current_col_no2 + 4)
+                c_sample  = get_column_letter(current_col_no2 + 5)
+                c_adj_ty  = get_column_letter(current_col_no2 + 6)
+                
+                # --- Python計算 ---
+                # First_G >= start_g
+                _prog_g = sub_prog[sub_prog['First_G'] >= start_g]
+                _hvn_g = sub_hvn[sub_hvn['First_G'] >= start_g]
+                
+                cnt_p = len(_prog_g)
+                cnt_h = len(_hvn_g)
+                total_cnt = cnt_p + cnt_h
+                
+                hatsu_val = "[-]"
+                ty_val = "[-]"
+                sample_val = "[-]"
+                
+                if total_cnt > 0:
+                    # 初当たり平均 = (ΣStart_prog + ΣStart_hvn) / total - start_g
+                    sum_g_p = _prog_g['First_G'].sum()
+                    sum_g_h = _hvn_g['First_G'].sum()
+                    avg_g = (sum_g_p + sum_g_h) / total_cnt
+                    hatsu_val = avg_g - start_g
+                    sample_val = total_cnt
+                    
+                    # TY平均 (<800Gのみ)
+                    _prog_ty = _prog_g[_prog_g['First_G'] < 800]
+                    _hvn_ty = _hvn_g[_hvn_g['First_G'] < 800]
+                    
+                    cnt_p_ty = len(_prog_ty)
+                    cnt_h_ty = len(_hvn_ty)
+                    total_cnt_ty = cnt_p_ty + cnt_h_ty
+                    
+                    if total_cnt_ty > 0:
+                         sum_ty_p = _prog_ty['Total_Dedama'].sum()
+                         sum_ty_h = _hvn_ty['Total_Dedama'].sum()
+                         avg_ty = (sum_ty_p + sum_ty_h) / total_cnt_ty
+                         ty_val = avg_ty - 32 * (50/25.3)
+                
+                # 1列目: 開始G
+                cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2, value=start_g)
+                cell.fill = row_fill
+                cell.border = ev_border
+                
+                # 2列目: 初当たり (値 / CeilingAnalysis!M6)
+                if hatsu_val != "[-]":
+                    cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 1, value=f"={hatsu_val}/CeilingAnalysis!$M$6")
+                    cell.number_format = '0.0'
+                else:
+                    cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 1, value="[-]")
+                cell.fill = row_fill
+                cell.border = ev_border
+                
+                # 3列目: TY (値)
+                cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 2, value=ty_val)
+                if ty_val != "[-]": cell.number_format = '#,##0'
+                cell.fill = row_fill
+                cell.border = ev_border
+                
+                # 4列目: 5枚等価 (数式: 調整TYと初当たりを使用)
+                val_5mai_no2 = f'=IF(OR({c_adj_ty}{row_idx}="[-]", {c_hatsu}{row_idx}="[-]"), "[-]", ({c_adj_ty}{row_idx} - {c_hatsu}{row_idx} * (50/25.3)) * 20)'
+                cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 3, value=val_5mai_no2)
+                cell.number_format = '#,##0'
+                cell.fill = row_fill
+                cell.border = ev_border
+                
+                # 5列目: 出玉率 (数式)
+                val_denom_no2 = f'({c_hatsu}{row_idx} * 3 + ({c_adj_ty}{row_idx} / 3.1 * 3))'
+                val_numer_no2 = f'({c_hatsu}{row_idx} * 3 + ({c_adj_ty}{row_idx} / 3.1 * 3) + {c_5mai}{row_idx} / 20)'
+                val_rate_no2 = f'=IF(OR({c_hatsu}{row_idx}="[-]", {c_adj_ty}{row_idx}="[-]", {c_5mai}{row_idx}="[-]", {val_denom_no2}=0), "[-]", {val_numer_no2} / {val_denom_no2})'
+                cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 4, value=val_rate_no2)
+                cell.number_format = '0.0%'
+                cell.fill = row_fill
+                cell.border = ev_border
+                
+                # 6列目: サンプル数 (値)
+                cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 5, value=sample_val)
+                if sample_val != "[-]": cell.number_format = '#,##0'
+                cell.fill = row_fill
+                cell.border = ev_border
+                
+                # 7列目: 調整TY (数式: TY * 係数)
+                adj_ty_formula_no2 = f'=IF({c_ty}{row_idx}="[-]", "[-]", {c_ty}{row_idx} * CeilingAnalysis!$M$6)'
+                cell = ws_ev_no2.cell(row=row_idx, column=current_col_no2 + 6, value=adj_ty_formula_no2)
+                cell.number_format = '#,##0'
+                cell.fill = row_fill
+                cell.border = ev_border
+            
+            # 次のテーブルへシフト (7列データ + 1列空白)
+            current_col_no2 += 8
+
     print(f"Excel file created: {OUTPUT_FILE}")
 
 
@@ -2162,13 +2329,38 @@ if __name__ == "__main__":
     print(f"設定: 天国閾値={HEAVEN_THRESHOLD}G, コイン持ち={COIN_HOLD}G/50枚")
     print()
 
-    print("データ読み込み中...")
-    df = load_data(INPUT_FILE)
-    print(f"  読み込み完了: {len(df)}行")
+    # キャッシュ有効性チェック
+    use_cache = False
+    data_mtime = os.path.getmtime(INPUT_FILE) if os.path.exists(INPUT_FILE) else 0
+    
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'rb') as f:
+                cache = pickle.load(f)
+            if cache.get('mtime') == data_mtime:
+                print("キャッシュから読み込み中...")
+                df = cache['df']
+                chains_df = cache['chains_df']
+                use_cache = True
+                print(f"  読み込み完了: {len(df)}行, チェーン数: {len(chains_df)}")
+        except Exception as e:
+            print(f"  キャッシュ読み込みエラー: {e}")
+            use_cache = False
+    
+    if not use_cache:
+        print("データ読み込み中...")
+        df = load_data(INPUT_FILE)
+        print(f"  読み込み完了: {len(df)}行")
 
-    print("連チャン解析中...")
-    df, chains_df = analyze_chains(df)
-    print(f"  チェーン数: {len(chains_df)}")
+        print("連チャン解析中...")
+        df, chains_df = analyze_chains(df)
+        print(f"  チェーン数: {len(chains_df)}")
+        
+        # キャッシュ保存
+        print("キャッシュ保存中...")
+        with open(CACHE_FILE, 'wb') as f:
+            pickle.dump({'mtime': data_mtime, 'df': df, 'chains_df': chains_df}, f)
+        print("  保存完了")
 
     print("天国移行率計算中...")
     heaven_rate_df = calculate_heaven_rate(chains_df)

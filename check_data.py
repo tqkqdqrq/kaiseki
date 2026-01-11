@@ -14,10 +14,14 @@ keys = set()
 clean_rows = []
 duplicates = 0
 bugs = 0
+zero_start_count = 0
+fixed_zero_start = 0
 bug_samples = []
 
 with open(filepath, 'r', encoding='utf-8-sig', newline='') as f:
     reader = csv.DictReader(f)
+    fieldnames = reader.fieldnames
+    
     for row in reader:
         start = row.get('Start','').strip()
         dedama = row.get('Dedama','').strip()
@@ -41,9 +45,21 @@ with open(filepath, 'r', encoding='utf-8-sig', newline='') as f:
             if len(bug_samples) < 3:
                 bug_samples.append(f"ID={row.get('ID','')}, Status={status}")
             continue
+
+        # Start=0 check
+        if start == '0':
+            zero_start_count += 1
+            if mode == 'clean':
+                row['Start'] = '1'
+                start = '1'
+                fixed_zero_start += 1
         
-        # Duplicate check
+        # Duplicate check (Fix: check key AFTER potential modifications if relevant, though Start is part of key usually? 
+        # Actually in add_data key includes Start. Here let's use the cleaned start if fixed)
+        
+        # Key definition
         key = (row.get('ID',''), status, start, dedama, row.get('Time',''))
+        
         if key in keys:
             duplicates += 1
             continue
@@ -54,14 +70,23 @@ print(f'=== チェック結果 ===')
 print(f'クリーンデータ: {len(clean_rows)}')
 print(f'重複データ: {duplicates}')
 print(f'バグデータ: {bugs}')
+print(f'Start=0データ: {zero_start_count}')
+
+if mode == 'clean':
+    print(f'Start=0修正: {fixed_zero_start}')
+
 if bug_samples:
     print(f'バグサンプル: {bug_samples}')
 
-if mode == 'clean' and (duplicates > 0 or bugs > 0):
-    with open(filepath, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['ID','Status','Start','Dedama','Time'])
-        writer.writeheader()
-        writer.writerows(clean_rows)
-    print(f'\n削除完了！残り: {len(clean_rows)}件')
+if mode == 'clean':
+    if duplicates > 0 or bugs > 0 or fixed_zero_start > 0:
+        with open(filepath, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(clean_rows)
+        print(f'\n削除・修正完了！保存件数: {len(clean_rows)}件')
+    else:
+        print('\n変更なし')
 elif mode == 'check':
-    print('\n削除するには: python check_data.py clean')
+    if duplicates > 0 or bugs > 0 or zero_start_count > 0:
+        print('\n修正するには: python check_data.py clean')
