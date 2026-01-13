@@ -39,3 +39,13 @@ python check_data.py clean
 ```powershell
 python filter_duo_data.py
 ```
+
+## 4. スタート1G除外（特定ID一括除外）
+
+各IDのデータで、一番最初のStartが1のものは、そのIDのデータを全て除外します。
+対象ファイル: `jyogai20251223_duo2_azukun.csv`
+
+// turbo
+```powershell
+python filter_first_start.py
+```

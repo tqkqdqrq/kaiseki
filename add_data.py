@@ -4,7 +4,7 @@
 
 import csv
 
-input_file = r'C:\Users\ilove\Desktop\解析\motoデータ\20260110_duo2.csv'
+input_file = r'C:\Users\ilove\Desktop\解析\motoデータ\20260112_duo2.csv'
 output_file = r'C:\Users\ilove\Desktop\解析\20251223_duo2_azukun.csv'
 
 # 既存データ読み込み
