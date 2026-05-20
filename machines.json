@@ -1,0 +1,22 @@
+{
+  "_doc": "機種別設定の中央レジストリ。generate_jissenchi.py / kaiseki_core/viewer/html_export.py / clawdbot/WP編集/wp-automation/post_dashboard.py が共通で読む。新機種追加はここに 1 エントリ足すだけ。",
+  "machines": [
+    {
+      "short": "bigdream",
+      "full_name": "ビッグドリーム THE GOLDEN PUSHER",
+      "kana_row": "は",
+      "kaiseki_dir": "ビッグドリーム解析Python",
+      "xlsx_prefix": "bigdream_analysis_",
+      "wp_title_search": "ビッグドリーム",
+      "label_short": "ビッグドリーム",
+      "spec": {
+        "type": "スマスロ (CZ→AT)",
+        "coin_hold": "30.7G/50枚",
+        "invest_per_g": 1.629,
+        "at_payout_per_g": 8.2,
+        "yen": 20,
+        "ceiling": "1499G"
+      }
+    }
+  ]
+}
